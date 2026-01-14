@@ -33,6 +33,23 @@ const int kStatusTimeoutMs = 500;
 const int kStatusRefreshMs = 5000;
 const UINT_PTR kStatusTimerId = 1;
 
+const int kTitleHeight = 18;
+const int kTitleTopMargin = 16;
+const int kTitleGap = 8;
+
+const int kServiceButtonWidth = 140;
+const int kServiceButtonHeight = 32;
+const int kStatusSize = 14;
+const int kStatusGap = 12;
+const int kServiceRowGap = 12;
+const int kLeftMargin = 24;
+
+const int kUtilityButtonWidth = 140;
+const int kUtilityButtonHeight = 32;
+const int kUtilityGap = 16;
+const int kBottomMargin = 20;
+const int kSeparatorGap = 6;
+
 HINSTANCE g_instance = nullptr;
 std::wstring g_serverAddress;
 int g_windowWidth = 0;
@@ -43,6 +60,8 @@ HWND g_btnRadarr = nullptr;
 HWND g_btnSonarr = nullptr;
 HWND g_btnChangeIp = nullptr;
 HWND g_btnQuit = nullptr;
+
+HWND g_lblServices = nullptr;
 
 HWND g_statusPlex = nullptr;
 HWND g_statusRadarr = nullptr;
@@ -380,6 +399,14 @@ void ApplyButtonFont(HWND button) {
     SendMessageW(button, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
 }
 
+int GetUtilityRowY(int clientHeight) {
+    return clientHeight - kBottomMargin - kUtilityButtonHeight;
+}
+
+int GetSeparatorY(int clientHeight) {
+    return GetUtilityRowY(clientHeight) - kSeparatorGap;
+}
+
 void SetIndicatorStatus(HWND indicator, bool* current, bool value) {
     if (!indicator || !current) {
         return;
@@ -442,41 +469,33 @@ void LayoutControls(HWND hwnd) {
     int clientWidth = rect.right - rect.left;
     int clientHeight = rect.bottom - rect.top;
 
-    const int serviceButtonWidth = 140;
-    const int serviceButtonHeight = 32;
-    const int statusSize = 14;
-    const int statusGap = 12;
-    const int rowGap = 12;
-    const int leftMargin = 24;
-    const int topMargin = 24;
+    MoveWindow(g_lblServices, kLeftMargin, kTitleTopMargin, 200, kTitleHeight, TRUE);
 
-    int statusX = leftMargin + serviceButtonWidth + statusGap;
+    int servicesY = kTitleTopMargin + kTitleHeight + kTitleGap;
+    int statusX = kLeftMargin + kServiceButtonWidth + kStatusGap;
 
-    MoveWindow(g_btnPlex, leftMargin, topMargin, serviceButtonWidth, serviceButtonHeight, TRUE);
-    MoveWindow(g_statusPlex, statusX, topMargin + (serviceButtonHeight - statusSize) / 2, statusSize, statusSize, TRUE);
+    MoveWindow(g_btnPlex, kLeftMargin, servicesY, kServiceButtonWidth, kServiceButtonHeight, TRUE);
+    MoveWindow(g_statusPlex, statusX, servicesY + (kServiceButtonHeight - kStatusSize) / 2, kStatusSize, kStatusSize, TRUE);
 
-    int row2Y = topMargin + serviceButtonHeight + rowGap;
-    MoveWindow(g_btnRadarr, leftMargin, row2Y, serviceButtonWidth, serviceButtonHeight, TRUE);
-    MoveWindow(g_statusRadarr, statusX, row2Y + (serviceButtonHeight - statusSize) / 2, statusSize, statusSize, TRUE);
+    int row2Y = servicesY + kServiceButtonHeight + kServiceRowGap;
+    MoveWindow(g_btnRadarr, kLeftMargin, row2Y, kServiceButtonWidth, kServiceButtonHeight, TRUE);
+    MoveWindow(g_statusRadarr, statusX, row2Y + (kServiceButtonHeight - kStatusSize) / 2, kStatusSize, kStatusSize, TRUE);
 
-    int row3Y = row2Y + serviceButtonHeight + rowGap;
-    MoveWindow(g_btnSonarr, leftMargin, row3Y, serviceButtonWidth, serviceButtonHeight, TRUE);
-    MoveWindow(g_statusSonarr, statusX, row3Y + (serviceButtonHeight - statusSize) / 2, statusSize, statusSize, TRUE);
+    int row3Y = row2Y + kServiceButtonHeight + kServiceRowGap;
+    MoveWindow(g_btnSonarr, kLeftMargin, row3Y, kServiceButtonWidth, kServiceButtonHeight, TRUE);
+    MoveWindow(g_statusSonarr, statusX, row3Y + (kServiceButtonHeight - kStatusSize) / 2, kStatusSize, kStatusSize, TRUE);
 
-    const int utilityButtonWidth = 140;
-    const int utilityButtonHeight = 32;
-    const int utilityGap = 16;
-    const int bottomMargin = 20;
-
-    int utilityRowY = clientHeight - bottomMargin - utilityButtonHeight;
-    int totalWidth = (utilityButtonWidth * 2) + utilityGap;
+    int utilityRowY = GetUtilityRowY(clientHeight);
+    int totalWidth = (kUtilityButtonWidth * 2) + kUtilityGap;
     int startX = (clientWidth - totalWidth) / 2;
 
-    MoveWindow(g_btnChangeIp, startX, utilityRowY, utilityButtonWidth, utilityButtonHeight, TRUE);
-    MoveWindow(g_btnQuit, startX + utilityButtonWidth + utilityGap, utilityRowY, utilityButtonWidth, utilityButtonHeight, TRUE);
+    MoveWindow(g_btnChangeIp, startX, utilityRowY, kUtilityButtonWidth, kUtilityButtonHeight, TRUE);
+    MoveWindow(g_btnQuit, startX + kUtilityButtonWidth + kUtilityGap, utilityRowY, kUtilityButtonWidth, kUtilityButtonHeight, TRUE);
 }
 
 void CreateControls(HWND hwnd) {
+    g_lblServices = CreateWindowW(L"STATIC", L"Services", WS_CHILD | WS_VISIBLE,
+        0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(ID_LABEL_SERVICES), g_instance, nullptr);
     g_btnPlex = CreateWindowW(L"BUTTON", L"Plex", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(ID_BTN_PLEX), g_instance, nullptr);
     g_btnRadarr = CreateWindowW(L"BUTTON", L"Radarr", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
@@ -495,6 +514,7 @@ void CreateControls(HWND hwnd) {
     g_statusSonarr = CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW,
         0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(ID_STATUS_SONARR), g_instance, nullptr);
 
+    ApplyButtonFont(g_lblServices);
     ApplyButtonFont(g_btnPlex);
     ApplyButtonFont(g_btnRadarr);
     ApplyButtonFont(g_btnSonarr);
@@ -509,6 +529,43 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
     case WM_CREATE:
         CreateControls(hwnd);
         return 0;
+    case WM_PAINT: {
+        PAINTSTRUCT ps = {};
+        HDC hdc = BeginPaint(hwnd, &ps);
+
+        RECT rect = {};
+        GetClientRect(hwnd, &rect);
+        int clientWidth = rect.right - rect.left;
+        int clientHeight = rect.bottom - rect.top;
+
+        int separatorY = GetSeparatorY(clientHeight);
+        if (separatorY < 0) {
+            separatorY = 0;
+        } else if (separatorY >= clientHeight) {
+            separatorY = clientHeight - 1;
+        }
+
+        int col1 = clientWidth / 3;
+        int col2 = (clientWidth * 2) / 3;
+
+        HPEN pen = CreatePen(PS_SOLID, 1, RGB(0, 0, 0));
+        HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, pen));
+
+        int maxX = std::max(0, clientWidth - 1);
+        MoveToEx(hdc, 0, separatorY, nullptr);
+        LineTo(hdc, maxX, separatorY);
+
+        MoveToEx(hdc, col1, 0, nullptr);
+        LineTo(hdc, col1, separatorY);
+
+        MoveToEx(hdc, col2, 0, nullptr);
+        LineTo(hdc, col2, separatorY);
+
+        SelectObject(hdc, oldPen);
+        DeleteObject(pen);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
     case WM_SIZE:
         LayoutControls(hwnd);
         return 0;
