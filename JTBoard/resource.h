@@ -1,0 +1,11 @@
+#pragma once
+
+#define IDD_SERVER_PROMPT 101
+#define IDC_SERVER_EDIT 1001
+
+#define ID_BTN_PLEX 2001
+#define ID_BTN_RADARR 2002
+#define ID_BTN_SONARR 2003
+#define ID_BTN_QUIT 2004
+
+#define IDC_STATIC -1

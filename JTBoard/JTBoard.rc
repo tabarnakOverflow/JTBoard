@@ -1,0 +1,13 @@
+#include "resource.h"
+#include <windows.h>
+
+IDD_SERVER_PROMPT DIALOGEX 0, 0, 260, 90
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "JTBoard Setup"
+FONT 9, "Segoe UI"
+BEGIN
+    LTEXT "Enter server IP or domain (no http://):", IDC_STATIC, 10, 10, 240, 10
+    EDITTEXT IDC_SERVER_EDIT, 10, 24, 240, 14, ES_AUTOHSCROLL
+    DEFPUSHBUTTON "OK", IDOK, 110, 55, 60, 14
+    PUSHBUTTON "Cancel", IDCANCEL, 180, 55, 60, 14
+END

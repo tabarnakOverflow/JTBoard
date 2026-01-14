@@ -1,0 +1,11 @@
+.vs/
+Debug/
+Release/
+x64/
+x86/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.VC.db
+*.VC.VC.opendb
