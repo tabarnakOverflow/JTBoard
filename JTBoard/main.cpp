@@ -23,6 +23,7 @@ namespace {
 const wchar_t kAppName[] = L"JTBoard";
 const wchar_t kRegPath[] = L"Software\\JTBoard";
 const wchar_t kRegValue[] = L"ServerAddress";
+const wchar_t kAppVersion[] = L"1.0";
 const wchar_t kCopyrightText[] = L"(c) 2026 Jonas Tkacz";
 
 const int kClientWidth = 800;
@@ -65,6 +66,7 @@ HWND g_btnRadarr = nullptr;
 HWND g_btnSonarr = nullptr;
 HWND g_btnChangeIp = nullptr;
 HWND g_btnHardwareReport = nullptr;
+HWND g_btnAbout = nullptr;
 HWND g_btnQuit = nullptr;
 
 HWND g_lblServices = nullptr;
@@ -886,11 +888,12 @@ void LayoutControls(HWND hwnd) {
     MoveWindow(g_btnHardwareReport, utilitiesX, servicesY, kUtilityColumnButtonWidth, kServiceButtonHeight, TRUE);
 
     int utilityRowY = GetUtilityRowY(clientHeight);
-    int totalWidth = (kUtilityButtonWidth * 2) + kUtilityGap;
+    int totalWidth = (kUtilityButtonWidth * 3) + (kUtilityGap * 2);
     int startX = (clientWidth - totalWidth) / 2;
 
     MoveWindow(g_btnChangeIp, startX, utilityRowY, kUtilityButtonWidth, kUtilityButtonHeight, TRUE);
-    MoveWindow(g_btnQuit, startX + kUtilityButtonWidth + kUtilityGap, utilityRowY, kUtilityButtonWidth, kUtilityButtonHeight, TRUE);
+    MoveWindow(g_btnAbout, startX + kUtilityButtonWidth + kUtilityGap, utilityRowY, kUtilityButtonWidth, kUtilityButtonHeight, TRUE);
+    MoveWindow(g_btnQuit, startX + (kUtilityButtonWidth + kUtilityGap) * 2, utilityRowY, kUtilityButtonWidth, kUtilityButtonHeight, TRUE);
 }
 
 void CreateControls(HWND hwnd) {
@@ -908,6 +911,8 @@ void CreateControls(HWND hwnd) {
         0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(ID_BTN_HW_REPORT), g_instance, nullptr);
     g_btnChangeIp = CreateWindowW(L"BUTTON", L"Change IP", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(ID_BTN_CHANGE_IP), g_instance, nullptr);
+    g_btnAbout = CreateWindowW(L"BUTTON", L"About", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(ID_BTN_ABOUT), g_instance, nullptr);
     g_btnQuit = CreateWindowW(L"BUTTON", L"Quit", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(ID_BTN_QUIT), g_instance, nullptr);
 
@@ -933,6 +938,7 @@ void CreateControls(HWND hwnd) {
     ApplyButtonFont(g_btnSonarr);
     ApplyButtonFont(g_btnHardwareReport);
     ApplyButtonFont(g_btnChangeIp);
+    ApplyButtonFont(g_btnAbout);
     ApplyButtonFont(g_btnQuit);
 
     LayoutControls(hwnd);
@@ -1035,6 +1041,14 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
                 UpdateServiceStatus();
             }
             return 0;
+        case ID_BTN_ABOUT: {
+            std::wstring message = L"JTBoard ";
+            message += kAppVersion;
+            message += L"\n\nPersonal homelab dashboard.\n\n";
+            message += kCopyrightText;
+            MessageBoxW(hwnd, message.c_str(), L"About JTBoard", MB_OK | MB_ICONINFORMATION);
+            return 0;
+        }
         case ID_BTN_QUIT:
             DestroyWindow(hwnd);
             return 0;
