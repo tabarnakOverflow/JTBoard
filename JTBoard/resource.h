@@ -1,7 +1,9 @@
 #pragma once
 
 #define IDD_SERVER_PROMPT 101
+#define IDD_PROGRESS 102
 #define IDC_SERVER_EDIT 1001
+#define IDC_PROGRESS_TEXT 1101
 
 #define ID_BTN_PLEX 2001
 #define ID_BTN_RADARR 2002

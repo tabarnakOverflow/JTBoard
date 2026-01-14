@@ -33,6 +33,7 @@ const int kFallbackPort = 32400;
 const int kStatusTimeoutMs = 500;
 const int kStatusRefreshMs = 5000;
 const UINT_PTR kStatusTimerId = 1;
+const UINT kReportCompleteMessage = WM_APP + 1;
 
 const int kTitleHeight = 22;
 const int kTitleTopMargin = 16;
@@ -68,6 +69,8 @@ HWND g_btnQuit = nullptr;
 HWND g_lblServices = nullptr;
 HWND g_lblUtilities = nullptr;
 HFONT g_titleFont = nullptr;
+HWND g_progressDialog = nullptr;
+HANDLE g_reportThread = nullptr;
 
 HWND g_statusPlex = nullptr;
 HWND g_statusRadarr = nullptr;
@@ -415,13 +418,79 @@ std::wstring GetDocumentsPath() {
     return L".";
 }
 
-std::wstring BuildReportDirectory() {
-    std::wstring docs = GetDocumentsPath();
-    std::wstring base = AppendPath(docs, L"JTBoard");
-    CreateDirectoryW(base.c_str(), nullptr);
+std::wstring GetExecutableDirectory() {
+    wchar_t path[MAX_PATH] = {};
+    DWORD len = GetModuleFileNameW(nullptr, path, static_cast<DWORD>(std::size(path)));
+    if (len == 0 || len >= std::size(path)) {
+        return L"";
+    }
+
+    std::wstring fullPath(path, len);
+    size_t lastSlash = fullPath.find_last_of(L"\\/");
+    if (lastSlash == std::wstring::npos) {
+        return L"";
+    }
+    return fullPath.substr(0, lastSlash);
+}
+
+bool EnsureDirectoryExists(const std::wstring& path) {
+    DWORD attrs = GetFileAttributesW(path.c_str());
+    if (attrs != INVALID_FILE_ATTRIBUTES) {
+        return (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    }
+    if (CreateDirectoryW(path.c_str(), nullptr)) {
+        return true;
+    }
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        attrs = GetFileAttributesW(path.c_str());
+        return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY);
+    }
+    return false;
+}
+
+bool CanWriteToDirectory(const std::wstring& path) {
+    std::wstring testPath = AppendPath(path, L"jtboard_write_test.tmp");
+    HANDLE file = CreateFileW(testPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    CloseHandle(file);
+    DeleteFileW(testPath.c_str());
+    return true;
+}
+
+std::wstring TryBuildReportDirectory(const std::wstring& root) {
+    if (root.empty()) {
+        return L"";
+    }
+    std::wstring base = AppendPath(root, L"JTBoard");
+    if (!EnsureDirectoryExists(base)) {
+        return L"";
+    }
     std::wstring reports = AppendPath(base, L"Reports");
-    CreateDirectoryW(reports.c_str(), nullptr);
+    if (!EnsureDirectoryExists(reports)) {
+        return L"";
+    }
+    if (!CanWriteToDirectory(reports)) {
+        return L"";
+    }
     return reports;
+}
+
+std::wstring BuildReportDirectory() {
+    std::wstring exeDir = GetExecutableDirectory();
+    std::wstring localReports = TryBuildReportDirectory(exeDir);
+    if (!localReports.empty()) {
+        return localReports;
+    }
+
+    std::wstring docs = GetDocumentsPath();
+    std::wstring docReports = TryBuildReportDirectory(docs);
+    if (!docReports.empty()) {
+        return docReports;
+    }
+
+    return exeDir.empty() ? L"." : exeDir;
 }
 
 std::wstring FormatTimestamp() {
@@ -592,6 +661,100 @@ bool GenerateHardwareReport(HWND owner, std::wstring* outPath) {
         *outPath = reportPath;
     }
     return ok;
+}
+
+struct ReportThreadArgs {
+    HWND notifyWindow = nullptr;
+};
+
+struct ReportResult {
+    bool ok = false;
+    std::wstring path;
+};
+
+void CenterWindow(HWND hwnd, HWND parent) {
+    RECT rect = {};
+    GetWindowRect(hwnd, &rect);
+    int width = rect.right - rect.left;
+    int height = rect.bottom - rect.top;
+
+    RECT parentRect = {};
+    if (parent) {
+        GetWindowRect(parent, &parentRect);
+    } else {
+        parentRect.left = 0;
+        parentRect.top = 0;
+        parentRect.right = GetSystemMetrics(SM_CXSCREEN);
+        parentRect.bottom = GetSystemMetrics(SM_CYSCREEN);
+    }
+
+    int x = parentRect.left + ((parentRect.right - parentRect.left) - width) / 2;
+    int y = parentRect.top + ((parentRect.bottom - parentRect.top) - height) / 2;
+    SetWindowPos(hwnd, nullptr, x, y, 0, 0, SWP_NOZORDER | SWP_NOSIZE);
+}
+
+INT_PTR CALLBACK ProgressProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lparam) {
+    switch (message) {
+    case WM_INITDIALOG:
+        CenterWindow(dialog, GetParent(dialog));
+        return TRUE;
+    case WM_CTLCOLORDLG:
+    case WM_CTLCOLORSTATIC: {
+        HDC hdc = reinterpret_cast<HDC>(wparam);
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
+        return reinterpret_cast<INT_PTR>(GetSysColorBrush(COLOR_WINDOW));
+    }
+    case WM_CLOSE:
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+
+DWORD WINAPI ReportThreadProc(LPVOID param) {
+    ReportThreadArgs* args = static_cast<ReportThreadArgs*>(param);
+    ReportResult* result = new ReportResult();
+    result->ok = GenerateHardwareReport(args ? args->notifyWindow : nullptr, &result->path);
+    HWND notifyWindow = args ? args->notifyWindow : nullptr;
+    delete args;
+    if (!notifyWindow || !PostMessageW(notifyWindow, kReportCompleteMessage, 0, reinterpret_cast<LPARAM>(result))) {
+        delete result;
+    }
+    return 0;
+}
+
+void StartHardwareReport(HWND hwnd) {
+    if (g_reportThread) {
+        return;
+    }
+
+    g_progressDialog = CreateDialogParamW(g_instance, MAKEINTRESOURCEW(IDD_PROGRESS), hwnd, ProgressProc, 0);
+    if (g_progressDialog) {
+        ShowWindow(g_progressDialog, SW_SHOW);
+        UpdateWindow(g_progressDialog);
+    }
+
+    EnableWindow(hwnd, FALSE);
+    if (g_btnHardwareReport) {
+        EnableWindow(g_btnHardwareReport, FALSE);
+    }
+
+    ReportThreadArgs* args = new ReportThreadArgs();
+    args->notifyWindow = hwnd;
+    g_reportThread = CreateThread(nullptr, 0, ReportThreadProc, args, 0, nullptr);
+    if (!g_reportThread) {
+        delete args;
+        if (g_progressDialog) {
+            DestroyWindow(g_progressDialog);
+            g_progressDialog = nullptr;
+        }
+        EnableWindow(hwnd, TRUE);
+        if (g_btnHardwareReport) {
+            EnableWindow(g_btnHardwareReport, TRUE);
+        }
+        MessageBoxW(hwnd, L"Failed to start the report job.", kAppName, MB_OK | MB_ICONERROR);
+    }
 }
 
 void LaunchService(HWND owner, int port) {
@@ -840,20 +1003,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         case ID_BTN_SONARR:
             LaunchService(hwnd, 8989);
             return 0;
-        case ID_BTN_HW_REPORT: {
-            EnableWindow(g_btnHardwareReport, FALSE);
-            std::wstring reportPath;
-            bool ok = GenerateHardwareReport(hwnd, &reportPath);
-            EnableWindow(g_btnHardwareReport, TRUE);
-            SetForegroundWindow(hwnd);
-            if (ok) {
-                std::wstring message = L"Hardware report saved to:\n" + reportPath;
-                MessageBoxW(hwnd, message.c_str(), kAppName, MB_OK | MB_ICONINFORMATION);
-            } else {
-                MessageBoxW(hwnd, L"Failed to generate the hardware report.", kAppName, MB_OK | MB_ICONERROR);
-            }
+        case ID_BTN_HW_REPORT:
+            StartHardwareReport(hwnd);
             return 0;
-        }
         case ID_BTN_CHANGE_IP:
             if (ChangeServerAddress(hwnd)) {
                 UpdateServiceStatus();
@@ -865,6 +1017,32 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         default:
             return 0;
         }
+    case kReportCompleteMessage: {
+        ReportResult* result = reinterpret_cast<ReportResult*>(lparam);
+        if (g_progressDialog) {
+            DestroyWindow(g_progressDialog);
+            g_progressDialog = nullptr;
+        }
+        if (g_reportThread) {
+            CloseHandle(g_reportThread);
+            g_reportThread = nullptr;
+        }
+        EnableWindow(hwnd, TRUE);
+        if (g_btnHardwareReport) {
+            EnableWindow(g_btnHardwareReport, TRUE);
+        }
+        SetForegroundWindow(hwnd);
+        if (result) {
+            if (result->ok) {
+                std::wstring message = L"Hardware report saved to:\n" + result->path;
+                MessageBoxW(hwnd, message.c_str(), kAppName, MB_OK | MB_ICONINFORMATION);
+            } else {
+                MessageBoxW(hwnd, L"Failed to generate the hardware report.", kAppName, MB_OK | MB_ICONERROR);
+            }
+            delete result;
+        }
+        return 0;
+    }
     case WM_DRAWITEM: {
         DRAWITEMSTRUCT* dis = reinterpret_cast<DRAWITEMSTRUCT*>(lparam);
         if (!dis || dis->CtlType != ODT_STATIC) {
