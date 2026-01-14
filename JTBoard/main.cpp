@@ -6,6 +6,7 @@
 #include <iphlpapi.h>
 #include <icmpapi.h>
 #include <shellapi.h>
+#include <shlobj.h>
 
 #include <algorithm>
 #include <cwctype>
@@ -45,6 +46,7 @@ const int kStatusGap = 12;
 const int kServiceRowGap = 12;
 const int kLeftMargin = 24;
 
+const int kUtilityColumnButtonWidth = 190;
 const int kUtilityButtonWidth = 140;
 const int kUtilityButtonHeight = 32;
 const int kUtilityGap = 16;
@@ -60,9 +62,11 @@ HWND g_btnPlex = nullptr;
 HWND g_btnRadarr = nullptr;
 HWND g_btnSonarr = nullptr;
 HWND g_btnChangeIp = nullptr;
+HWND g_btnHardwareReport = nullptr;
 HWND g_btnQuit = nullptr;
 
 HWND g_lblServices = nullptr;
+HWND g_lblUtilities = nullptr;
 HFONT g_titleFont = nullptr;
 
 HWND g_statusPlex = nullptr;
@@ -388,6 +392,208 @@ bool ChangeServerAddress(HWND owner) {
     return true;
 }
 
+std::wstring AppendPath(const std::wstring& base, const std::wstring& leaf) {
+    if (base.empty()) {
+        return leaf;
+    }
+    if (base.back() == L'\\' || base.back() == L'/') {
+        return base + leaf;
+    }
+    return base + L"\\" + leaf;
+}
+
+std::wstring GetDocumentsPath() {
+    wchar_t path[MAX_PATH] = {};
+    if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_PERSONAL | CSIDL_FLAG_CREATE, nullptr, SHGFP_TYPE_CURRENT, path))) {
+        return path;
+    }
+
+    wchar_t current[MAX_PATH] = {};
+    if (GetCurrentDirectoryW(static_cast<DWORD>(std::size(current)), current) > 0) {
+        return current;
+    }
+    return L".";
+}
+
+std::wstring BuildReportDirectory() {
+    std::wstring docs = GetDocumentsPath();
+    std::wstring base = AppendPath(docs, L"JTBoard");
+    CreateDirectoryW(base.c_str(), nullptr);
+    std::wstring reports = AppendPath(base, L"Reports");
+    CreateDirectoryW(reports.c_str(), nullptr);
+    return reports;
+}
+
+std::wstring FormatTimestamp() {
+    SYSTEMTIME st = {};
+    GetLocalTime(&st);
+    wchar_t buffer[32] = {};
+    swprintf_s(buffer, L"%04u%02u%02u_%02u%02u%02u", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    return buffer;
+}
+
+bool WriteTextFile(const std::wstring& path, const std::string& content) {
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    DWORD written = 0;
+    BOOL ok = WriteFile(file, content.data(), static_cast<DWORD>(content.size()), &written, nullptr);
+    CloseHandle(file);
+    return ok && written == content.size();
+}
+
+std::string NarrowFromWide(const std::wstring& input) {
+    if (input.empty()) {
+        return std::string();
+    }
+    int len = WideCharToMultiByte(CP_ACP, 0, input.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (len <= 0) {
+        return std::string();
+    }
+    std::string output(len - 1, '\0');
+    WideCharToMultiByte(CP_ACP, 0, input.c_str(), -1, &output[0], len, nullptr, nullptr);
+    return output;
+}
+
+bool RunCommandScript(const std::wstring& scriptPath, DWORD* exitCode) {
+    wchar_t comspec[MAX_PATH] = {};
+    DWORD len = GetEnvironmentVariableW(L"COMSPEC", comspec, static_cast<DWORD>(std::size(comspec)));
+    if (len == 0 || len >= std::size(comspec)) {
+        wcscpy_s(comspec, L"C:\\Windows\\System32\\cmd.exe");
+    }
+
+    std::wstring cmdLine = L"\"";
+    cmdLine += comspec;
+    cmdLine += L"\" /c \"";
+    cmdLine += scriptPath;
+    cmdLine += L"\"";
+
+    std::vector<wchar_t> cmdBuffer(cmdLine.begin(), cmdLine.end());
+    cmdBuffer.push_back(L'\0');
+
+    STARTUPINFOW si = {};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+
+    PROCESS_INFORMATION pi = {};
+    if (!CreateProcessW(comspec, cmdBuffer.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+        return false;
+    }
+
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD code = 0;
+    GetExitCodeProcess(pi.hProcess, &code);
+    if (exitCode) {
+        *exitCode = code;
+    }
+
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return code == 0;
+}
+
+bool GenerateHardwareReport(HWND owner, std::wstring* outPath) {
+    std::wstring reportsDir = BuildReportDirectory();
+    std::wstring timestamp = FormatTimestamp();
+    std::wstring reportPath = AppendPath(reportsDir, L"JTBoard_Report_" + timestamp + L".txt");
+    std::wstring scriptPath = AppendPath(reportsDir, L"JTBoard_Report_" + timestamp + L".cmd");
+
+    std::string reportPathAnsi = NarrowFromWide(reportPath);
+    if (reportPathAnsi.empty()) {
+        return false;
+    }
+
+    std::string script;
+    script += "@echo off\r\n";
+    script += "setlocal\r\n";
+    script += "set \"OUT=";
+    script += reportPathAnsi;
+    script += "\"\r\n";
+    script += "echo JTBoard Hardware/Software Report> \"%OUT%\"\r\n";
+    script += "echo Generated: %DATE% %TIME%>> \"%OUT%\"\r\n";
+    script += "echo.>> \"%OUT%\"\r\n";
+    script += "echo ==== SYSTEMINFO ====>> \"%OUT%\"\r\n";
+    script += "systeminfo >> \"%OUT%\" 2>&1\r\n";
+    script += "echo.>> \"%OUT%\"\r\n";
+    script += "echo ==== COMPUTER SYSTEM ====>> \"%OUT%\"\r\n";
+    script += "wmic computersystem get /format:list >> \"%OUT%\" 2>&1\r\n";
+    script += "echo.>> \"%OUT%\"\r\n";
+    script += "echo ==== OS ====>> \"%OUT%\"\r\n";
+    script += "wmic os get /format:list >> \"%OUT%\" 2>&1\r\n";
+    script += "echo.>> \"%OUT%\"\r\n";
+    script += "echo ==== BIOS ====>> \"%OUT%\"\r\n";
+    script += "wmic bios get /format:list >> \"%OUT%\" 2>&1\r\n";
+    script += "echo.>> \"%OUT%\"\r\n";
+    script += "echo ==== BASEBOARD ====>> \"%OUT%\"\r\n";
+    script += "wmic baseboard get /format:list >> \"%OUT%\" 2>&1\r\n";
+    script += "echo.>> \"%OUT%\"\r\n";
+    script += "echo ==== CPU ====>> \"%OUT%\"\r\n";
+    script += "wmic cpu get /format:list >> \"%OUT%\" 2>&1\r\n";
+    script += "echo.>> \"%OUT%\"\r\n";
+    script += "echo ==== MEMORY ====>> \"%OUT%\"\r\n";
+    script += "wmic memorychip get /format:list >> \"%OUT%\" 2>&1\r\n";
+    script += "echo.>> \"%OUT%\"\r\n";
+    script += "echo ==== DISKS ====>> \"%OUT%\"\r\n";
+    script += "wmic diskdrive get /format:list >> \"%OUT%\" 2>&1\r\n";
+    script += "echo.>> \"%OUT%\"\r\n";
+    script += "echo ==== LOGICAL DISKS ====>> \"%OUT%\"\r\n";
+    script += "wmic logicaldisk get /format:list >> \"%OUT%\" 2>&1\r\n";
+    script += "echo.>> \"%OUT%\"\r\n";
+    script += "echo ==== NETWORK ADAPTERS ====>> \"%OUT%\"\r\n";
+    script += "wmic nic get /format:list >> \"%OUT%\" 2>&1\r\n";
+    script += "echo.>> \"%OUT%\"\r\n";
+    script += "echo ==== IP CONFIG ====>> \"%OUT%\"\r\n";
+    script += "ipconfig /all >> \"%OUT%\" 2>&1\r\n";
+    script += "echo.>> \"%OUT%\"\r\n";
+    script += "echo ==== DRIVERS ====>> \"%OUT%\"\r\n";
+    script += "driverquery /v >> \"%OUT%\" 2>&1\r\n";
+    script += "echo.>> \"%OUT%\"\r\n";
+    script += "echo ==== SERVICES ====>> \"%OUT%\"\r\n";
+    script += "wmic service list brief >> \"%OUT%\" 2>&1\r\n";
+    script += "echo.>> \"%OUT%\"\r\n";
+    script += "echo ==== STARTUP ====>> \"%OUT%\"\r\n";
+    script += "wmic startup list full >> \"%OUT%\" 2>&1\r\n";
+    script += "echo.>> \"%OUT%\"\r\n";
+    script += "echo ==== INSTALLED UPDATES ====>> \"%OUT%\"\r\n";
+    script += "wmic qfe list >> \"%OUT%\" 2>&1\r\n";
+    script += "echo.>> \"%OUT%\"\r\n";
+    script += "echo ==== RUNNING TASKS ====>> \"%OUT%\"\r\n";
+    script += "tasklist /v >> \"%OUT%\" 2>&1\r\n";
+    script += "echo.>> \"%OUT%\"\r\n";
+    script += "echo ==== NETWORK CONNECTIONS ====>> \"%OUT%\"\r\n";
+    script += "netstat -ano >> \"%OUT%\" 2>&1\r\n";
+    script += "echo.>> \"%OUT%\"\r\n";
+    script += "echo ==== INSTALLED PROGRAMS (HKLM 64-bit) ====>> \"%OUT%\"\r\n";
+    script += "reg query \"HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\" /s >> \"%OUT%\" 2>&1\r\n";
+    script += "echo.>> \"%OUT%\"\r\n";
+    script += "echo ==== INSTALLED PROGRAMS (HKLM 32-bit) ====>> \"%OUT%\"\r\n";
+    script += "reg query \"HKLM\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\" /s >> \"%OUT%\" 2>&1\r\n";
+    script += "echo.>> \"%OUT%\"\r\n";
+    script += "echo ==== INSTALLED PROGRAMS (HKCU) ====>> \"%OUT%\"\r\n";
+    script += "reg query \"HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\" /s >> \"%OUT%\" 2>&1\r\n";
+    script += "echo.>> \"%OUT%\"\r\n";
+    script += "echo ==== ENVIRONMENT ====>> \"%OUT%\"\r\n";
+    script += "set >> \"%OUT%\" 2>&1\r\n";
+    script += "echo.>> \"%OUT%\"\r\n";
+    script += "echo ==== DONE ====>> \"%OUT%\"\r\n";
+    script += "endlocal\r\n";
+
+    if (!WriteTextFile(scriptPath, script)) {
+        return false;
+    }
+
+    DWORD exitCode = 0;
+    bool ok = RunCommandScript(scriptPath, &exitCode);
+    DeleteFileW(scriptPath.c_str());
+    if (ok && outPath) {
+        *outPath = reportPath;
+    }
+    return ok;
+}
+
 void LaunchService(HWND owner, int port) {
     std::wstring url = BuildServiceUrl(g_serverAddress, port);
     if (url.empty()) {
@@ -492,7 +698,11 @@ void LayoutControls(HWND hwnd) {
     int clientHeight = rect.bottom - rect.top;
 
     int col1Width = clientWidth / 3;
+    int col2X = col1Width;
+    int col2Width = (clientWidth * 2) / 3 - col2X;
+
     MoveWindow(g_lblServices, 0, kTitleTopMargin, col1Width, kTitleHeight, TRUE);
+    MoveWindow(g_lblUtilities, col2X, kTitleTopMargin, col2Width, kTitleHeight, TRUE);
 
     int servicesY = GetTitleUnderlineY() + kTitleToServicesGap;
     int statusX = kLeftMargin + kServiceButtonWidth + kStatusGap;
@@ -508,6 +718,9 @@ void LayoutControls(HWND hwnd) {
     MoveWindow(g_btnSonarr, kLeftMargin, row3Y, kServiceButtonWidth, kServiceButtonHeight, TRUE);
     MoveWindow(g_statusSonarr, statusX, row3Y + (kServiceButtonHeight - kStatusSize) / 2, kStatusSize, kStatusSize, TRUE);
 
+    int utilitiesX = col2X + kLeftMargin;
+    MoveWindow(g_btnHardwareReport, utilitiesX, servicesY, kUtilityColumnButtonWidth, kServiceButtonHeight, TRUE);
+
     int utilityRowY = GetUtilityRowY(clientHeight);
     int totalWidth = (kUtilityButtonWidth * 2) + kUtilityGap;
     int startX = (clientWidth - totalWidth) / 2;
@@ -519,12 +732,16 @@ void LayoutControls(HWND hwnd) {
 void CreateControls(HWND hwnd) {
     g_lblServices = CreateWindowW(L"STATIC", L"Services", WS_CHILD | WS_VISIBLE | SS_CENTER,
         0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(ID_LABEL_SERVICES), g_instance, nullptr);
+    g_lblUtilities = CreateWindowW(L"STATIC", L"Utilities", WS_CHILD | WS_VISIBLE | SS_CENTER,
+        0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(ID_LABEL_UTILITIES), g_instance, nullptr);
     g_btnPlex = CreateWindowW(L"BUTTON", L"Plex", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(ID_BTN_PLEX), g_instance, nullptr);
     g_btnRadarr = CreateWindowW(L"BUTTON", L"Radarr", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(ID_BTN_RADARR), g_instance, nullptr);
     g_btnSonarr = CreateWindowW(L"BUTTON", L"Sonarr", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(ID_BTN_SONARR), g_instance, nullptr);
+    g_btnHardwareReport = CreateWindowW(L"BUTTON", L"Pull Hardware Report", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(ID_BTN_HW_REPORT), g_instance, nullptr);
     g_btnChangeIp = CreateWindowW(L"BUTTON", L"Change IP", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(ID_BTN_CHANGE_IP), g_instance, nullptr);
     g_btnQuit = CreateWindowW(L"BUTTON", L"Quit", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
@@ -542,12 +759,15 @@ void CreateControls(HWND hwnd) {
     }
     if (g_titleFont) {
         SendMessageW(g_lblServices, WM_SETFONT, reinterpret_cast<WPARAM>(g_titleFont), TRUE);
+        SendMessageW(g_lblUtilities, WM_SETFONT, reinterpret_cast<WPARAM>(g_titleFont), TRUE);
     } else {
         ApplyButtonFont(g_lblServices);
+        ApplyButtonFont(g_lblUtilities);
     }
     ApplyButtonFont(g_btnPlex);
     ApplyButtonFont(g_btnRadarr);
     ApplyButtonFont(g_btnSonarr);
+    ApplyButtonFont(g_btnHardwareReport);
     ApplyButtonFont(g_btnChangeIp);
     ApplyButtonFont(g_btnQuit);
 
@@ -620,6 +840,20 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         case ID_BTN_SONARR:
             LaunchService(hwnd, 8989);
             return 0;
+        case ID_BTN_HW_REPORT: {
+            EnableWindow(g_btnHardwareReport, FALSE);
+            std::wstring reportPath;
+            bool ok = GenerateHardwareReport(hwnd, &reportPath);
+            EnableWindow(g_btnHardwareReport, TRUE);
+            SetForegroundWindow(hwnd);
+            if (ok) {
+                std::wstring message = L"Hardware report saved to:\n" + reportPath;
+                MessageBoxW(hwnd, message.c_str(), kAppName, MB_OK | MB_ICONINFORMATION);
+            } else {
+                MessageBoxW(hwnd, L"Failed to generate the hardware report.", kAppName, MB_OK | MB_ICONERROR);
+            }
+            return 0;
+        }
         case ID_BTN_CHANGE_IP:
             if (ChangeServerAddress(hwnd)) {
                 UpdateServiceStatus();
@@ -653,7 +887,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
     case WM_CTLCOLORSTATIC: {
         HDC hdc = reinterpret_cast<HDC>(wparam);
         HWND control = reinterpret_cast<HWND>(lparam);
-        if (control == g_lblServices) {
+        if (control == g_lblServices || control == g_lblUtilities) {
             SetBkMode(hdc, TRANSPARENT);
             SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
             return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
