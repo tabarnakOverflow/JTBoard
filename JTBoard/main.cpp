@@ -23,6 +23,7 @@ namespace {
 const wchar_t kAppName[] = L"JTBoard";
 const wchar_t kRegPath[] = L"Software\\JTBoard";
 const wchar_t kRegValue[] = L"ServerAddress";
+const wchar_t kCopyrightText[] = L"(c) 2026 Jonas Tkacz";
 
 const int kClientWidth = 800;
 const int kClientHeight = 600;
@@ -984,6 +985,29 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         MoveToEx(hdc, col2, 0, nullptr);
         LineTo(hdc, col2, separatorY);
 
+        RECT textRect = {};
+        HFONT font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+        HFONT oldFont = static_cast<HFONT>(SelectObject(hdc, font));
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
+        DrawTextW(hdc, kCopyrightText, -1, &textRect, DT_CALCRECT | DT_SINGLELINE);
+
+        const LONG textMargin = 10;
+        int textWidth = textRect.right - textRect.left;
+        int textHeight = textRect.bottom - textRect.top;
+        textRect.right = static_cast<LONG>(clientWidth) - textMargin;
+        textRect.left = textRect.right - textWidth;
+        if (textRect.left < textMargin) {
+            textRect.left = textMargin;
+        }
+        textRect.bottom = static_cast<LONG>(clientHeight) - textMargin;
+        textRect.top = textRect.bottom - textHeight;
+        if (textRect.top < textMargin) {
+            textRect.top = textMargin;
+        }
+        DrawTextW(hdc, kCopyrightText, -1, &textRect, DT_RIGHT | DT_SINGLELINE);
+
+        SelectObject(hdc, oldFont);
         SelectObject(hdc, oldPen);
         DeleteObject(pen);
         EndPaint(hwnd, &ps);
