@@ -1,7 +1,9 @@
-#include <windows.h>
-#include <shellapi.h>
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
 #include <winsock2.h>
+#include <windows.h>
 #include <ws2tcpip.h>
+#include <shellapi.h>
 #include <icmpapi.h>
 #include <iphlpapi.h>
 
