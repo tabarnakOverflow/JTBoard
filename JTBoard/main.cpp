@@ -29,6 +29,9 @@ const int kClientHeight = 600;
 const int kPingTimeoutMs = 1000;
 const int kTcpTimeoutMs = 1000;
 const int kFallbackPort = 32400;
+const int kStatusTimeoutMs = 500;
+const int kStatusRefreshMs = 5000;
+const UINT_PTR kStatusTimerId = 1;
 
 HINSTANCE g_instance = nullptr;
 std::wstring g_serverAddress;
@@ -38,7 +41,16 @@ int g_windowHeight = 0;
 HWND g_btnPlex = nullptr;
 HWND g_btnRadarr = nullptr;
 HWND g_btnSonarr = nullptr;
+HWND g_btnChangeIp = nullptr;
 HWND g_btnQuit = nullptr;
+
+HWND g_statusPlex = nullptr;
+HWND g_statusRadarr = nullptr;
+HWND g_statusSonarr = nullptr;
+
+bool g_statusPlexOk = false;
+bool g_statusRadarrOk = false;
+bool g_statusSonarrOk = false;
 
 std::wstring TrimWhitespace(const std::wstring& input) {
     size_t start = 0;
@@ -294,11 +306,10 @@ bool IsServerReachable(const std::wstring& host) {
     return TcpCheck(host, kFallbackPort, kTcpTimeoutMs);
 }
 
-bool EnsureServerAddress(HWND owner) {
-    std::wstring candidate;
-    bool haveSaved = LoadServerAddress(&candidate);
+bool AcquireServerAddress(HWND owner, const std::wstring& initialValue, bool forcePrompt, std::wstring* out) {
+    std::wstring candidate = initialValue;
 
-    if (!haveSaved) {
+    if (forcePrompt || candidate.empty()) {
         if (!PromptForServerAddress(owner, &candidate)) {
             return false;
         }
@@ -307,7 +318,9 @@ bool EnsureServerAddress(HWND owner) {
     while (true) {
         if (IsServerReachable(candidate)) {
             SaveServerAddress(candidate);
-            g_serverAddress = candidate;
+            if (out) {
+                *out = candidate;
+            }
             return true;
         }
 
@@ -319,7 +332,9 @@ bool EnsureServerAddress(HWND owner) {
 
         if (choice == IDYES) {
             SaveServerAddress(candidate);
-            g_serverAddress = candidate;
+            if (out) {
+                *out = candidate;
+            }
             return true;
         }
         if (choice == IDNO) {
@@ -330,6 +345,26 @@ bool EnsureServerAddress(HWND owner) {
         }
         return false;
     }
+}
+
+bool EnsureServerAddress(HWND owner) {
+    std::wstring candidate;
+    bool haveSaved = LoadServerAddress(&candidate);
+    std::wstring resolved;
+    if (!AcquireServerAddress(owner, candidate, !haveSaved, &resolved)) {
+        return false;
+    }
+    g_serverAddress = resolved;
+    return true;
+}
+
+bool ChangeServerAddress(HWND owner) {
+    std::wstring updated;
+    if (!AcquireServerAddress(owner, g_serverAddress, true, &updated)) {
+        return false;
+    }
+    g_serverAddress = updated;
+    return true;
 }
 
 void LaunchService(HWND owner, int port) {
@@ -345,57 +380,137 @@ void ApplyButtonFont(HWND button) {
     SendMessageW(button, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
 }
 
-void LayoutButtons(HWND hwnd) {
+void SetIndicatorStatus(HWND indicator, bool* current, bool value) {
+    if (!indicator || !current) {
+        return;
+    }
+    if (*current != value) {
+        *current = value;
+        InvalidateRect(indicator, nullptr, TRUE);
+    }
+}
+
+bool CheckServicePort(int port, int timeoutMs) {
+    if (g_serverAddress.empty()) {
+        return false;
+    }
+    return TcpCheck(g_serverAddress, port, timeoutMs);
+}
+
+void UpdateServiceStatus() {
+    SetIndicatorStatus(g_statusPlex, &g_statusPlexOk, CheckServicePort(32400, kStatusTimeoutMs));
+    SetIndicatorStatus(g_statusRadarr, &g_statusRadarrOk, CheckServicePort(7878, kStatusTimeoutMs));
+    SetIndicatorStatus(g_statusSonarr, &g_statusSonarrOk, CheckServicePort(8989, kStatusTimeoutMs));
+}
+
+void DrawStatusIndicator(const DRAWITEMSTRUCT* dis, bool ok) {
+    if (!dis) {
+        return;
+    }
+
+    HDC hdc = dis->hDC;
+    RECT rect = dis->rcItem;
+
+    HBRUSH background = CreateSolidBrush(GetSysColor(COLOR_WINDOW));
+    FillRect(hdc, &rect, background);
+    DeleteObject(background);
+
+    int width = rect.right - rect.left;
+    int height = rect.bottom - rect.top;
+    int size = std::min(width, height);
+    int left = rect.left + (width - size) / 2;
+    int top = rect.top + (height - size) / 2;
+
+    COLORREF color = ok ? RGB(46, 204, 113) : RGB(231, 76, 60);
+    HBRUSH fill = CreateSolidBrush(color);
+    HPEN pen = CreatePen(PS_SOLID, 1, RGB(70, 70, 70));
+
+    HBRUSH oldBrush = static_cast<HBRUSH>(SelectObject(hdc, fill));
+    HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, pen));
+    Ellipse(hdc, left, top, left + size, top + size);
+    SelectObject(hdc, oldBrush);
+    SelectObject(hdc, oldPen);
+
+    DeleteObject(fill);
+    DeleteObject(pen);
+}
+
+void LayoutControls(HWND hwnd) {
     RECT rect = {};
     GetClientRect(hwnd, &rect);
 
     int clientWidth = rect.right - rect.left;
     int clientHeight = rect.bottom - rect.top;
 
-    const int buttonWidth = 120;
-    const int buttonHeight = 32;
-    const int buttonGap = 12;
-    const int rowGap = 10;
+    const int serviceButtonWidth = 140;
+    const int serviceButtonHeight = 32;
+    const int statusSize = 14;
+    const int statusGap = 12;
+    const int rowGap = 12;
+    const int leftMargin = 24;
+    const int topMargin = 24;
+
+    int statusX = leftMargin + serviceButtonWidth + statusGap;
+
+    MoveWindow(g_btnPlex, leftMargin, topMargin, serviceButtonWidth, serviceButtonHeight, TRUE);
+    MoveWindow(g_statusPlex, statusX, topMargin + (serviceButtonHeight - statusSize) / 2, statusSize, statusSize, TRUE);
+
+    int row2Y = topMargin + serviceButtonHeight + rowGap;
+    MoveWindow(g_btnRadarr, leftMargin, row2Y, serviceButtonWidth, serviceButtonHeight, TRUE);
+    MoveWindow(g_statusRadarr, statusX, row2Y + (serviceButtonHeight - statusSize) / 2, statusSize, statusSize, TRUE);
+
+    int row3Y = row2Y + serviceButtonHeight + rowGap;
+    MoveWindow(g_btnSonarr, leftMargin, row3Y, serviceButtonWidth, serviceButtonHeight, TRUE);
+    MoveWindow(g_statusSonarr, statusX, row3Y + (serviceButtonHeight - statusSize) / 2, statusSize, statusSize, TRUE);
+
+    const int utilityButtonWidth = 140;
+    const int utilityButtonHeight = 32;
+    const int utilityGap = 16;
     const int bottomMargin = 20;
 
-    int totalWidth = (buttonWidth * 3) + (buttonGap * 2);
-    int row2Y = clientHeight - bottomMargin - buttonHeight;
-    int row1Y = row2Y - rowGap - buttonHeight;
+    int utilityRowY = clientHeight - bottomMargin - utilityButtonHeight;
+    int totalWidth = (utilityButtonWidth * 2) + utilityGap;
     int startX = (clientWidth - totalWidth) / 2;
 
-    MoveWindow(g_btnPlex, startX, row1Y, buttonWidth, buttonHeight, TRUE);
-    MoveWindow(g_btnRadarr, startX + buttonWidth + buttonGap, row1Y, buttonWidth, buttonHeight, TRUE);
-    MoveWindow(g_btnSonarr, startX + (buttonWidth + buttonGap) * 2, row1Y, buttonWidth, buttonHeight, TRUE);
-
-    int quitX = (clientWidth - buttonWidth) / 2;
-    MoveWindow(g_btnQuit, quitX, row2Y, buttonWidth, buttonHeight, TRUE);
+    MoveWindow(g_btnChangeIp, startX, utilityRowY, utilityButtonWidth, utilityButtonHeight, TRUE);
+    MoveWindow(g_btnQuit, startX + utilityButtonWidth + utilityGap, utilityRowY, utilityButtonWidth, utilityButtonHeight, TRUE);
 }
 
-void CreateButtons(HWND hwnd) {
+void CreateControls(HWND hwnd) {
     g_btnPlex = CreateWindowW(L"BUTTON", L"Plex", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(ID_BTN_PLEX), g_instance, nullptr);
     g_btnRadarr = CreateWindowW(L"BUTTON", L"Radarr", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(ID_BTN_RADARR), g_instance, nullptr);
     g_btnSonarr = CreateWindowW(L"BUTTON", L"Sonarr", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(ID_BTN_SONARR), g_instance, nullptr);
+    g_btnChangeIp = CreateWindowW(L"BUTTON", L"Change IP", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(ID_BTN_CHANGE_IP), g_instance, nullptr);
     g_btnQuit = CreateWindowW(L"BUTTON", L"Quit", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(ID_BTN_QUIT), g_instance, nullptr);
+
+    g_statusPlex = CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW,
+        0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(ID_STATUS_PLEX), g_instance, nullptr);
+    g_statusRadarr = CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW,
+        0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(ID_STATUS_RADARR), g_instance, nullptr);
+    g_statusSonarr = CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW,
+        0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(ID_STATUS_SONARR), g_instance, nullptr);
 
     ApplyButtonFont(g_btnPlex);
     ApplyButtonFont(g_btnRadarr);
     ApplyButtonFont(g_btnSonarr);
+    ApplyButtonFont(g_btnChangeIp);
     ApplyButtonFont(g_btnQuit);
 
-    LayoutButtons(hwnd);
+    LayoutControls(hwnd);
 }
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
     switch (message) {
     case WM_CREATE:
-        CreateButtons(hwnd);
+        CreateControls(hwnd);
         return 0;
     case WM_SIZE:
-        LayoutButtons(hwnd);
+        LayoutControls(hwnd);
         return 0;
     case WM_COMMAND:
         switch (LOWORD(wparam)) {
@@ -408,12 +523,42 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         case ID_BTN_SONARR:
             LaunchService(hwnd, 8989);
             return 0;
+        case ID_BTN_CHANGE_IP:
+            if (ChangeServerAddress(hwnd)) {
+                UpdateServiceStatus();
+            }
+            return 0;
         case ID_BTN_QUIT:
             DestroyWindow(hwnd);
             return 0;
         default:
             return 0;
         }
+    case WM_DRAWITEM: {
+        DRAWITEMSTRUCT* dis = reinterpret_cast<DRAWITEMSTRUCT*>(lparam);
+        if (!dis || dis->CtlType != ODT_STATIC) {
+            return FALSE;
+        }
+        switch (dis->CtlID) {
+        case ID_STATUS_PLEX:
+            DrawStatusIndicator(dis, g_statusPlexOk);
+            return TRUE;
+        case ID_STATUS_RADARR:
+            DrawStatusIndicator(dis, g_statusRadarrOk);
+            return TRUE;
+        case ID_STATUS_SONARR:
+            DrawStatusIndicator(dis, g_statusSonarrOk);
+            return TRUE;
+        default:
+            return FALSE;
+        }
+    }
+    case WM_TIMER:
+        if (wparam == kStatusTimerId) {
+            UpdateServiceStatus();
+            return 0;
+        }
+        return DefWindowProcW(hwnd, message, wparam, lparam);
     case WM_GETMINMAXINFO: {
         MINMAXINFO* mmi = reinterpret_cast<MINMAXINFO*>(lparam);
         if (mmi) {
@@ -425,6 +570,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         return 0;
     }
     case WM_DESTROY:
+        KillTimer(hwnd, kStatusTimerId);
         PostQuitMessage(0);
         return 0;
     default:
@@ -494,6 +640,9 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int cmdShow) {
         WSACleanup();
         return 0;
     }
+
+    UpdateServiceStatus();
+    SetTimer(hwnd, kStatusTimerId, kStatusRefreshMs, nullptr);
 
     MSG msg = {};
     while (GetMessageW(&msg, nullptr, 0, 0)) {
