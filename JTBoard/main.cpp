@@ -33,9 +33,10 @@ const int kStatusTimeoutMs = 500;
 const int kStatusRefreshMs = 5000;
 const UINT_PTR kStatusTimerId = 1;
 
-const int kTitleHeight = 18;
+const int kTitleHeight = 22;
 const int kTitleTopMargin = 16;
-const int kTitleGap = 8;
+const int kTitleUnderlineOffset = 6;
+const int kTitleToServicesGap = 10;
 
 const int kServiceButtonWidth = 140;
 const int kServiceButtonHeight = 32;
@@ -62,6 +63,7 @@ HWND g_btnChangeIp = nullptr;
 HWND g_btnQuit = nullptr;
 
 HWND g_lblServices = nullptr;
+HFONT g_titleFont = nullptr;
 
 HWND g_statusPlex = nullptr;
 HWND g_statusRadarr = nullptr;
@@ -399,12 +401,32 @@ void ApplyButtonFont(HWND button) {
     SendMessageW(button, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
 }
 
+HFONT CreateTitleFont(HWND hwnd, int pointSize, int weight) {
+    HFONT baseFont = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+    LOGFONTW lf = {};
+    if (GetObjectW(baseFont, sizeof(lf), &lf) == 0) {
+        return nullptr;
+    }
+
+    HDC hdc = GetDC(hwnd);
+    if (hdc) {
+        lf.lfHeight = -MulDiv(pointSize, GetDeviceCaps(hdc, LOGPIXELSY), 72);
+        ReleaseDC(hwnd, hdc);
+    }
+    lf.lfWeight = weight;
+    return CreateFontIndirectW(&lf);
+}
+
 int GetUtilityRowY(int clientHeight) {
     return clientHeight - kBottomMargin - kUtilityButtonHeight;
 }
 
 int GetSeparatorY(int clientHeight) {
     return GetUtilityRowY(clientHeight) - kSeparatorGap;
+}
+
+int GetTitleUnderlineY() {
+    return kTitleTopMargin + kTitleHeight + kTitleUnderlineOffset;
 }
 
 void SetIndicatorStatus(HWND indicator, bool* current, bool value) {
@@ -469,9 +491,10 @@ void LayoutControls(HWND hwnd) {
     int clientWidth = rect.right - rect.left;
     int clientHeight = rect.bottom - rect.top;
 
-    MoveWindow(g_lblServices, kLeftMargin, kTitleTopMargin, 200, kTitleHeight, TRUE);
+    int col1Width = clientWidth / 3;
+    MoveWindow(g_lblServices, 0, kTitleTopMargin, col1Width, kTitleHeight, TRUE);
 
-    int servicesY = kTitleTopMargin + kTitleHeight + kTitleGap;
+    int servicesY = GetTitleUnderlineY() + kTitleToServicesGap;
     int statusX = kLeftMargin + kServiceButtonWidth + kStatusGap;
 
     MoveWindow(g_btnPlex, kLeftMargin, servicesY, kServiceButtonWidth, kServiceButtonHeight, TRUE);
@@ -494,7 +517,7 @@ void LayoutControls(HWND hwnd) {
 }
 
 void CreateControls(HWND hwnd) {
-    g_lblServices = CreateWindowW(L"STATIC", L"Services", WS_CHILD | WS_VISIBLE,
+    g_lblServices = CreateWindowW(L"STATIC", L"Services", WS_CHILD | WS_VISIBLE | SS_CENTER,
         0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(ID_LABEL_SERVICES), g_instance, nullptr);
     g_btnPlex = CreateWindowW(L"BUTTON", L"Plex", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(ID_BTN_PLEX), g_instance, nullptr);
@@ -514,7 +537,14 @@ void CreateControls(HWND hwnd) {
     g_statusSonarr = CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW,
         0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(ID_STATUS_SONARR), g_instance, nullptr);
 
-    ApplyButtonFont(g_lblServices);
+    if (!g_titleFont) {
+        g_titleFont = CreateTitleFont(hwnd, 16, FW_SEMIBOLD);
+    }
+    if (g_titleFont) {
+        SendMessageW(g_lblServices, WM_SETFONT, reinterpret_cast<WPARAM>(g_titleFont), TRUE);
+    } else {
+        ApplyButtonFont(g_lblServices);
+    }
     ApplyButtonFont(g_btnPlex);
     ApplyButtonFont(g_btnRadarr);
     ApplyButtonFont(g_btnSonarr);
@@ -545,6 +575,13 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
             separatorY = clientHeight - 1;
         }
 
+        int underlineY = GetTitleUnderlineY();
+        if (underlineY < 0) {
+            underlineY = 0;
+        } else if (underlineY >= clientHeight) {
+            underlineY = clientHeight - 1;
+        }
+
         int col1 = clientWidth / 3;
         int col2 = (clientWidth * 2) / 3;
 
@@ -554,6 +591,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         int maxX = std::max(0, clientWidth - 1);
         MoveToEx(hdc, 0, separatorY, nullptr);
         LineTo(hdc, maxX, separatorY);
+
+        MoveToEx(hdc, 0, underlineY, nullptr);
+        LineTo(hdc, maxX, underlineY);
 
         MoveToEx(hdc, col1, 0, nullptr);
         LineTo(hdc, col1, separatorY);
@@ -610,6 +650,16 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
             return FALSE;
         }
     }
+    case WM_CTLCOLORSTATIC: {
+        HDC hdc = reinterpret_cast<HDC>(wparam);
+        HWND control = reinterpret_cast<HWND>(lparam);
+        if (control == g_lblServices) {
+            SetBkMode(hdc, TRANSPARENT);
+            SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
+            return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
+        }
+        return DefWindowProcW(hwnd, message, wparam, lparam);
+    }
     case WM_TIMER:
         if (wparam == kStatusTimerId) {
             UpdateServiceStatus();
@@ -628,6 +678,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
     }
     case WM_DESTROY:
         KillTimer(hwnd, kStatusTimerId);
+        if (g_titleFont) {
+            DeleteObject(g_titleFont);
+            g_titleFont = nullptr;
+        }
         PostQuitMessage(0);
         return 0;
     default:
